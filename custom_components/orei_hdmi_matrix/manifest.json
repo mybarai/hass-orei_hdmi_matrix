@@ -1,0 +1,11 @@
+{
+    "domain": "orei_hdmi_matrix",
+    "name": "OREI HDMI Matrix",
+    "documentation": "https://github.com/danisla/hass-orei_hdmi_matrix",
+    "requirements": [],
+    "dependencies": [],
+    "version": "1.0.0",
+    "codeowners": [
+      "@danisla"
+    ]
+  }
