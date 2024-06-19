@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import json
 import urllib.request
+from collections.abc import Mapping
+import time
 
 import voluptuous as vol
 
@@ -89,6 +91,7 @@ def setup_platform(
     if DATA_HDMIMATRIX not in hass.data:
         hass.data[DATA_HDMIMATRIX] = {}
 
+    api = None
     data = None
     connection = None
     host = config.get(CONF_HOST)
@@ -112,7 +115,7 @@ def setup_platform(
     ):
         _LOGGER.info("Adding zone %d - %s", zone_id, name)
         unique_id = f"{connection}-{zone_id}"
-        device = HDMIMatrixZone(connection, sources, zone_id, name)
+        device = HDMIMatrixZone(api, sources, zone_id, name)
         hass.data[DATA_HDMIMATRIX][unique_id] = device
         devices.append(device)
 
@@ -141,15 +144,27 @@ def setup_platform(
 
 
 class HDMIMatrixAPI:
-    """HDMI Matrix API abstration"""
+    """HDMI Matrix API abstration."""
 
-    def __init__(self, host):
-        """Initialize the API"""
+    def __init__(self, host) -> None:
+        """Initialize the API."""
 
-        self._host = host
+        self._host: str = host
+        self._cache: Mapping[str, (int, str)] = {}
 
     def _hdmi_matrix_cmd(self, cmd):
         cmd["language"] = 0
+        cache_key = json.dumps(cmd)
+
+        cached = self._cache.get(cache_key, None)
+        if cached:
+            (ts, data) = cached
+            if time.time() - ts < 5:
+                _LOGGER.debug(f"Cache Hit: '{cache_key}'")
+                return json.loads(data)
+            del self._cache[cache_key]
+
+        _LOGGER.debug(f"Cache miss: '{cache_key}'")
 
         resp_data = None
         req = urllib.request.Request(
@@ -165,21 +180,19 @@ class HDMIMatrixAPI:
         except Exception as e:
             _LOGGER.error(f"Error connecting to the HDMI Matrix: {e}")
 
+        self._cache[cache_key] = (time.time(), json.dumps(resp_data))
         return resp_data
 
     def get_video_status(self):
-        """Get the video status"""
-
+        """Get the video status."""
         return self._hdmi_matrix_cmd({"comhead": "get video status"})
 
     def get_output_status(self):
-        """Get the output status"""
-
+        """Get the output status."""
         return self._hdmi_matrix_cmd({"comhead": "get output status"})
 
     def video_switch(self, input_id, output_id):
-        """Switch video source"""
-
+        """Switch video source."""
         return self._hdmi_matrix_cmd(
             {"comhead": "video switch", "source": [input_id, output_id]}
         )
@@ -190,9 +203,9 @@ class HDMIMatrixAPI:
 class HDMIMatrixZone(MediaPlayerEntity):
     """Representation of a HDMI matrix zone."""
 
-    def __init__(self, hdmi_host, sources, zone_id, zone_name):
+    def __init__(self, api, sources, zone_id, zone_name):
         """Initialize new zone."""
-        self._api = HDMIMatrixAPI(hdmi_host)
+        self._api = api
         # dict source_id -> source name
         self._source_id_name = sources
         # dict source name -> source_id
@@ -208,7 +221,6 @@ class HDMIMatrixZone(MediaPlayerEntity):
 
     def update(self):
         """Retrieve latest state."""
-
         data = self._api.get_video_status()
         if data is None:
             self._state = STATE_OFF
