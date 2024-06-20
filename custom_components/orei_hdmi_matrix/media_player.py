@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from . import api
-
 import logging
 
 import voluptuous as vol
@@ -16,16 +14,49 @@ from homeassistant.components.media_player import (
 from homeassistant.components.media_player.const import DOMAIN
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    ATTR_STATE,
     CONF_HOST,
     CONF_NAME,
     CONF_TYPE,
     STATE_OFF,
     STATE_ON,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+
+from . import api as matrix_api
+from .const import (
+    ATTR_ARC,
+    ATTR_CONNECT,
+    ATTR_HDCP,
+    ATTR_INPUT_ACTIVE,
+    ATTR_INPUT_EDID,
+    ATTR_SCALER_MODE,
+    ATTR_SOURCE,
+    ATTR_STREAM,
+    CONF_ALL_SOURCE,
+    CONF_ARC,
+    CONF_CONNECT,
+    CONF_EDID,
+    CONF_HDCP,
+    CONF_INPUT_ACTIVE,
+    CONF_OUT,
+    CONF_SCALER,
+    CONF_SOURCES,
+    CONF_ZONES,
+    DATA_HDMIMATRIX,
+    SCALER_TYPES,
+    SERVICE_SET_ARC,
+    SERVICE_SET_INPUT_EDID,
+    SERVICE_SET_SCALER,
+    SERVICE_SET_TX_STREAM,
+    SERVICE_SET_ZONE,
+    EDIDModes,
+    ScalerModes,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +67,6 @@ MEDIA_PLAYER_SCHEMA = vol.Schema(
         ATTR_ENTITY_ID: cv.comp_entity_ids,
     }
 )
-
 
 ZONE_SCHEMA = vol.Schema(
     {
@@ -50,23 +80,38 @@ SOURCE_SCHEMA = vol.Schema(
     }
 )
 
-DATA_HDMIMATRIX = "hdmi_matrix"
-
-SERVICE_SETZONE = "hdmi_matrix_set_zone"
-ATTR_SOURCE = "source"
-
-SERVICE_SETZONE_SCHEMA = MEDIA_PLAYER_SCHEMA.extend(
+SERVICE_SET_ZONE_SCHEMA = MEDIA_PLAYER_SCHEMA.extend(
     {vol.Required(ATTR_SOURCE): cv.string}
 )
 
-CONF_SOURCES = "allinputname"
-CONF_ZONES = "alloutputname"
+SERVICE_SET_SCALER_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required(ATTR_SCALER_MODE): cv.enum(ScalerModes),
+    }
+)
 
-# Valid zone ids: 1-8
-ZONE_IDS = vol.All(vol.Coerce(int), vol.Range(min=1, max=8))
+SERVICE_SET_ARC_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required(ATTR_STATE): cv.boolean,
+    }
+)
 
-# Valid source ids: 1-8
-SOURCE_IDS = vol.All(vol.Coerce(int), vol.Range(min=1, max=8))
+SERVICE_SET_TX_STREAM_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required(ATTR_STATE): cv.boolean,
+    }
+)
+
+SERVICE_SET_INPUT_EDID_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required(ATTR_INPUT_EDID): cv.enum(EDIDModes),
+    }
+)
+
 
 PLATFORM_SCHEMA = vol.All(
     cv.has_at_least_one_key(CONF_HOST),
@@ -89,12 +134,11 @@ def setup_platform(
     if DATA_HDMIMATRIX not in hass.data:
         hass.data[DATA_HDMIMATRIX] = {}
 
-    # api = None
     data = None
     connection = None
     host = config.get(CONF_HOST)
     if host is not None:
-        data = api.get_video_status(host)
+        data = matrix_api.get_video_status(host)
         if data is not None:
             connection = host
 
@@ -112,14 +156,14 @@ def setup_platform(
     ):
         _LOGGER.info("Adding zone %d - %s", zone_id, name)
         unique_id = f"{connection}-{zone_id}"
-        device = HDMIMatrixZone(api, connection, sources, zone_id, name)
+        device = HDMIMatrixZone(connection, sources, zone_id, name)
         hass.data[DATA_HDMIMATRIX][unique_id] = device
         devices.append(device)
 
     add_entities(devices, True)
 
-    def service_handle(service):
-        """Handle for services."""
+    def set_source_service_handle(service):
+        """Handler for setting source service."""
         entity_ids = service.data.get(ATTR_ENTITY_ID)
         source = service.data.get(ATTR_SOURCE)
         if entity_ids:
@@ -132,23 +176,124 @@ def setup_platform(
             devices = hass.data[DATA_HDMIMATRIX].values()
 
         for device in devices:
-            if service.service == SERVICE_SETZONE:
+            if service.service == SERVICE_SET_ZONE:
                 device.select_source(source)
 
+    def set_scaler_mode_service_handle(service):
+        """Handler for setting scaler mode service."""
+        entity_ids = service.data.get(ATTR_ENTITY_ID)
+        scaler_mode = service.data.get(ATTR_SCALER_MODE)
+
+        if entity_ids:
+            devices = [
+                device
+                for device in hass.data[DATA_HDMIMATRIX].values()
+                if device.entity_id in entity_ids
+            ]
+        else:
+            devices = hass.data[DATA_HDMIMATRIX].values()
+
+        for device in devices:
+            if service.service == SERVICE_SET_SCALER:
+                device.set_scaler_mode(scaler_mode)
+
+    def set_arc_service_handle(service):
+        """Handler for setting ARC service."""
+        entity_ids = service.data.get(ATTR_ENTITY_ID)
+        state = service.data.get(ATTR_STATE)
+
+        if entity_ids:
+            devices = [
+                device
+                for device in hass.data[DATA_HDMIMATRIX].values()
+                if device.entity_id in entity_ids
+            ]
+        else:
+            devices = hass.data[DATA_HDMIMATRIX].values()
+
+        for device in devices:
+            if service.service == SERVICE_SET_ARC:
+                device.set_arc(state)
+
+    def set_tx_stream_service_handle(service):
+        """Handler for setting TX Stream service."""
+        entity_ids = service.data.get(ATTR_ENTITY_ID)
+        state = service.data.get(ATTR_STATE)
+
+        if entity_ids:
+            devices = [
+                device
+                for device in hass.data[DATA_HDMIMATRIX].values()
+                if device.entity_id in entity_ids
+            ]
+        else:
+            devices = hass.data[DATA_HDMIMATRIX].values()
+
+        for device in devices:
+            if service.service == SERVICE_SET_TX_STREAM:
+                device.set_tx_stream(state)
+
+    def set_input_edid_service_handle(service):
+        """Handler for setting input EDID service."""
+        entity_ids = service.data.get(ATTR_ENTITY_ID)
+        input_edid = service.data.get(ATTR_INPUT_EDID)
+
+        if entity_ids:
+            devices = [
+                device
+                for device in hass.data[DATA_HDMIMATRIX].values()
+                if device.entity_id in entity_ids
+            ]
+        else:
+            devices = hass.data[DATA_HDMIMATRIX].values()
+
+        for device in devices:
+            if service.service == SERVICE_SET_INPUT_EDID:
+                device.set_input_edid(input_edid)
+
     hass.services.register(
-        DOMAIN, SERVICE_SETZONE, service_handle, schema=SERVICE_SETZONE_SCHEMA
+        DOMAIN,
+        SERVICE_SET_ZONE,
+        set_source_service_handle,
+        schema=SERVICE_SET_ZONE_SCHEMA,
+    )
+
+    hass.services.register(
+        DOMAIN,
+        SERVICE_SET_SCALER,
+        set_scaler_mode_service_handle,
+        schema=SERVICE_SET_SCALER_SCHEMA,
+    )
+
+    hass.services.register(
+        DOMAIN,
+        SERVICE_SET_ARC,
+        set_arc_service_handle,
+        schema=SERVICE_SET_ARC_SCHEMA,
+    )
+
+    hass.services.register(
+        DOMAIN,
+        SERVICE_SET_TX_STREAM,
+        set_tx_stream_service_handle,
+        schema=SERVICE_SET_TX_STREAM_SCHEMA,
+    )
+
+    hass.services.register(
+        DOMAIN,
+        SERVICE_SET_INPUT_EDID,
+        set_input_edid_service_handle,
+        schema=SERVICE_SET_INPUT_EDID_SCHEMA,
     )
 
 
-# TODO: Make this a member of a parent class that aggregates the update() call for all zones.
-#       Rationale: the API returns status for all inputs/outputs and is not fast, so zones should not be performing their own updates.
 class HDMIMatrixZone(MediaPlayerEntity):
     """Representation of a HDMI matrix zone."""
 
-    def __init__(self, api, host, sources, zone_id, zone_name):
+    def __init__(self, host, sources, zone_id, zone_name):
         """Initialize new zone."""
-        self._api = api
         self._host = host
+        self._source_id = STATE_UNKNOWN
         # dict source_id -> source name
         self._source_id_name = sources
         # dict source name -> source_id
@@ -158,29 +303,80 @@ class HDMIMatrixZone(MediaPlayerEntity):
             self._source_name_id.keys(), key=lambda v: self._source_name_id[v]
         )
         self._zone_id = zone_id
-        self._name = f"OREI HDMI Matrix Zone - {zone_name}"
+        self._name = f"OREI HDMI Matrix - {zone_name}"
         self._state = None
         self._source = None
+        self._attributes = {
+            ATTR_SCALER_MODE: STATE_UNKNOWN,
+            ATTR_STREAM: STATE_UNKNOWN,
+            ATTR_ARC: STATE_UNKNOWN,
+            ATTR_CONNECT: STATE_UNKNOWN,
+            ATTR_HDCP: STATE_UNKNOWN,
+            ATTR_INPUT_EDID: STATE_UNKNOWN,
+            ATTR_INPUT_ACTIVE: STATE_UNKNOWN,
+        }
 
     def update(self):
         """Retrieve latest state."""
-        data = self._api.get_video_status(self._host)
-        if data is None:
-            self._state = STATE_OFF
+        video_status = matrix_api.get_video_status(self._host)
+        if video_status is None:
+            self._state = STATE_UNKNOWN
+            return
+        self._source_id = video_status[CONF_ALL_SOURCE][self._zone_id - 1]
+
+        output_status = matrix_api.get_output_status(self._host)
+        if output_status is None:
+            self._state = STATE_UNKNOWN
             return
 
-        if "allsource" in data:
-            state = data["allsource"][self._zone_id - 1]
-        else:
-            _LOGGER.error("Failed to find 'allsource' in video status output")
+        input_status = matrix_api.get_input_status(self._host)
+        if input_status is None:
+            self._state = STATE_UNKNOWN
             return
 
-        idx = state
+        # The last zone_id is for "All Outputs" and does not have output status.
+        if self._zone_id < 9:
+            self._attributes[ATTR_SCALER_MODE] = SCALER_TYPES[
+                output_status[CONF_SCALER][self._zone_id - 1]
+            ]
+            self._attributes[ATTR_STREAM] = (
+                STATE_ON
+                if output_status[CONF_OUT][self._zone_id - 1] == 1
+                else STATE_OFF
+            )
+            self._attributes[ATTR_ARC] = (
+                STATE_ON
+                if output_status[CONF_ARC][self._zone_id - 1] == 1
+                else STATE_OFF
+            )
+            self._attributes[ATTR_CONNECT] = (
+                STATE_ON
+                if output_status[CONF_CONNECT][self._zone_id - 1] == 1
+                else STATE_OFF
+            )
+            self._attributes[ATTR_HDCP] = (
+                STATE_ON
+                if output_status[CONF_HDCP][self._zone_id - 1] == 1
+                else STATE_OFF
+            )
+            # self._source_id = output_status[CONF_ALL_SOURCE][self._zone_id - 1]
+            self._attributes[ATTR_INPUT_EDID] = EDIDModes(
+                input_status[CONF_EDID][self._source_id - 1] + 1
+            ).name
+
+            self._attributes[ATTR_INPUT_ACTIVE] = (
+                STATE_ON
+                if input_status[CONF_INPUT_ACTIVE][self._source_id - 1]
+                else STATE_OFF
+            )
+
+        idx = self._source_id
         self._state = STATE_ON
         if idx in self._source_id_name:
             self._source = self._source_id_name[idx]
         else:
             self._source = None
+        self._attr_extra_state_attributes = self._attributes
 
     @property
     def name(self):
@@ -217,6 +413,28 @@ class HDMIMatrixZone(MediaPlayerEntity):
         if source not in self._source_name_id:
             return
         idx = self._source_name_id[source]
-        _LOGGER.debug("Setting zone %d source to %s", self._zone_id, idx)
+        _LOGGER.info("Setting zone %d source to %s", self._zone_id, idx)
 
-        self._api.video_switch(self._host, idx, self._zone_id)
+        matrix_api.video_switch(self._host, idx, self._zone_id)
+
+    def set_scaler_mode(self, scaler_mode: ScalerModes):
+        """Set scaler mode."""
+        _LOGGER.info(
+            f"Setting scaler mode for zone {self._zone_id} to value {scaler_mode.value}"
+        )
+        matrix_api.video_scaler(self._host, self._zone_id, scaler_mode.value)
+
+    def set_arc(self, on_state):
+        """Set ARC state"""
+        _LOGGER.info(f"Setting ARC for zone {self._zone_id} to value {on_state}")
+        matrix_api.set_arc(self._host, self._zone_id, on_state)
+
+    def set_tx_stream(self, on_state):
+        """Set output stream."""
+        _LOGGER.info(f"Setting TX stream for zone {self._zone_id} to value {on_state}")
+        matrix_api.tx_stream(self._host, self._zone_id, on_state)
+
+    def set_input_edid(self, input_edid: EDIDModes):
+        """Set EDID of selected source"""
+        _LOGGER.info(f"Setting EDID of input {self._source_id} to {input_edid.name}")
+        matrix_api.set_input_edid(self._host, self._source_id, (input_edid.value - 1))
