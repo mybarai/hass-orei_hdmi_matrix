@@ -307,6 +307,7 @@ class HDMIMatrixZone(MediaPlayerEntity):
         self._state = None
         self._source = None
         self._attributes = {
+            CONF_HOST: self._host,
             ATTR_SCALER_MODE: STATE_UNKNOWN,
             ATTR_STREAM: STATE_UNKNOWN,
             ATTR_ARC: STATE_UNKNOWN,
