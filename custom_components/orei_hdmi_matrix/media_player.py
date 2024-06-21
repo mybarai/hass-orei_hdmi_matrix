@@ -30,6 +30,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import api as matrix_api
 from .const import (
     ATTR_ARC,
+    ATTR_CEC_CMD,
     ATTR_CONNECT,
     ATTR_HDCP,
     ATTR_INPUT_ACTIVE,
@@ -48,13 +49,18 @@ from .const import (
     CONF_SOURCES,
     CONF_ZONES,
     DATA_HDMIMATRIX,
-    SCALER_TYPES,
+    SERVICE_INPUT_CEC,
+    SERVICE_OUTPUT_CEC,
     SERVICE_SET_ARC,
     SERVICE_SET_INPUT_EDID,
     SERVICE_SET_SCALER,
     SERVICE_SET_TX_STREAM,
     SERVICE_SET_ZONE,
+)
+from .orei_hdmi_matrix import (
     EDIDModes,
+    InputCECCommands,
+    OutputCECCommands,
     ScalerModes,
 )
 
@@ -112,6 +118,19 @@ SERVICE_SET_INPUT_EDID_SCHEMA = vol.Schema(
     }
 )
 
+SERVICE_OUTPUT_CEC_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required(ATTR_CEC_CMD): cv.enum(OutputCECCommands),
+    }
+)
+
+SERVICE_INPUT_CEC_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required(ATTR_CEC_CMD): cv.enum(InputCECCommands),
+    }
+)
 
 PLATFORM_SCHEMA = vol.All(
     cv.has_at_least_one_key(CONF_HOST),
@@ -251,6 +270,42 @@ def setup_platform(
             if service.service == SERVICE_SET_INPUT_EDID:
                 device.set_input_edid(input_edid)
 
+    def output_cec_command_service_handle(service):
+        """Handler for sending output CEC command."""
+        entity_ids = service.data.get(ATTR_ENTITY_ID)
+        cmd = service.data.get(ATTR_CEC_CMD)
+
+        if entity_ids:
+            devices = [
+                device
+                for device in hass.data[DATA_HDMIMATRIX].values()
+                if device.entity_id in entity_ids
+            ]
+        else:
+            devices = hass.data[DATA_HDMIMATRIX].values()
+
+        for device in devices:
+            if service.service == SERVICE_OUTPUT_CEC:
+                device.output_cec_command(cmd)
+
+    def input_cec_command_service_handle(service):
+        """Handler for sending input CEC command."""
+        entity_ids = service.data.get(ATTR_ENTITY_ID)
+        cmd = service.data.get(ATTR_CEC_CMD)
+
+        if entity_ids:
+            devices = [
+                device
+                for device in hass.data[DATA_HDMIMATRIX].values()
+                if device.entity_id in entity_ids
+            ]
+        else:
+            devices = hass.data[DATA_HDMIMATRIX].values()
+
+        for device in devices:
+            if service.service == SERVICE_INPUT_CEC:
+                device.input_cec_command(cmd)
+
     hass.services.register(
         DOMAIN,
         SERVICE_SET_ZONE,
@@ -284,6 +339,20 @@ def setup_platform(
         SERVICE_SET_INPUT_EDID,
         set_input_edid_service_handle,
         schema=SERVICE_SET_INPUT_EDID_SCHEMA,
+    )
+
+    hass.services.register(
+        DOMAIN,
+        SERVICE_OUTPUT_CEC,
+        output_cec_command_service_handle,
+        schema=SERVICE_OUTPUT_CEC_SCHEMA,
+    )
+
+    hass.services.register(
+        DOMAIN,
+        SERVICE_INPUT_CEC,
+        input_cec_command_service_handle,
+        schema=SERVICE_INPUT_CEC_SCHEMA,
     )
 
 
@@ -337,9 +406,9 @@ class HDMIMatrixZone(MediaPlayerEntity):
 
         # The last zone_id is for "All Outputs" and does not have output status.
         if self._zone_id < 9:
-            self._attributes[ATTR_SCALER_MODE] = SCALER_TYPES[
+            self._attributes[ATTR_SCALER_MODE] = ScalerModes(
                 output_status[CONF_SCALER][self._zone_id - 1]
-            ]
+            ).name
             self._attributes[ATTR_STREAM] = (
                 STATE_ON
                 if output_status[CONF_OUT][self._zone_id - 1] == 1
@@ -360,7 +429,6 @@ class HDMIMatrixZone(MediaPlayerEntity):
                 if output_status[CONF_HDCP][self._zone_id - 1] == 1
                 else STATE_OFF
             )
-            # self._source_id = output_status[CONF_ALL_SOURCE][self._zone_id - 1]
             self._attributes[ATTR_INPUT_EDID] = EDIDModes(
                 input_status[CONF_EDID][self._source_id - 1] + 1
             ).name
@@ -436,6 +504,20 @@ class HDMIMatrixZone(MediaPlayerEntity):
         matrix_api.tx_stream(self._host, self._zone_id, on_state)
 
     def set_input_edid(self, input_edid: EDIDModes):
-        """Set EDID of selected source"""
+        """Set EDID of selected source."""
         _LOGGER.info(f"Setting EDID of input {self._source_id} to {input_edid.name}")
-        matrix_api.set_input_edid(self._host, self._source_id, (input_edid.value - 1))
+        matrix_api.set_input_edid(self._host, self._source_id, input_edid)
+
+    def output_cec_command(self, cmd: OutputCECCommands):
+        """Send output CEC command."""
+        _LOGGER.info(
+            f"Sending output id {self._name}={self._zone_id} CEC command: {cmd.name}={cmd.value}"
+        )
+        matrix_api.output_cec_command(self._host, (self._zone_id - 1), cmd)
+
+    def input_cec_command(self, cmd: InputCECCommands):
+        """Send input CEC command."""
+        _LOGGER.info(
+            f"Sending input id {self._source_names[self._source_id - 1]}={self._source_id} CEC command: {cmd.name}={cmd.value}"
+        )
+        matrix_api.input_cec_command(self._host, (self._source_id - 1), cmd)
