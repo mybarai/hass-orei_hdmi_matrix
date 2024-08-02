@@ -128,7 +128,7 @@ class HDMIMatrixAPI:
         self._cache: Mapping[str, (int, str)] = {}
 
     def _hdmi_matrix_cmd(self, host, cmd, use_cache=False):
-        cmd["language"] = 0
+        #cmd["language"] = 0
         cache_key = cmd["comhead"]
 
         if use_cache:
@@ -154,6 +154,7 @@ class HDMIMatrixAPI:
                 with urllib.request.urlopen(req, timeout=5) as r:
                     if r.getcode() == 200:
                         resp_data = json.load(r)
+                        _LOGGER.error(resp_data)
             except Exception as e:
                 _LOGGER.error(f"Error connecting to the HDMI Matrix: {e}")
 
@@ -181,13 +182,15 @@ class HDMIMatrixAPI:
                 valid &= field in resp
         elif comhead == "get output status":
             for field in [
+                "power",
                 "allsource",
                 "allscaler",
-                "allhdcp",
                 "allout",
+                "allhdbtout",
                 "allconnect",
-                "allarc",
+                "allhdbtconnect",
                 "name",
+                "hdbtname",
             ]:
                 valid &= field in resp
         elif comhead == "get input status":
